@@ -24,10 +24,26 @@ from src.models.lstm_autoencoder import LSTMAutoencoder
 from src.preprocess import tokens_to_midi
 
 
-def train_epoch(model, dataloader, optimizer, device, criterion):
+def compute_batch_metrics(logits, targets, pad_id):
+    """Return token accuracy and token count for a batch."""
+    preds = logits.argmax(dim=-1)
+    valid_mask = targets.ne(pad_id)
+    valid_tokens = valid_mask.sum().item()
+
+    if valid_tokens == 0:
+        return 0.0, 0
+
+    correct = ((preds == targets) & valid_mask).sum().item()
+    token_accuracy = correct / valid_tokens
+    return token_accuracy, valid_tokens
+
+
+def train_epoch(model, dataloader, optimizer, device, criterion, pad_id):
     """Train for one epoch."""
     model.train()
     total_loss = 0.0
+    total_accuracy = 0.0
+    total_tokens = 0
     
     for batch_idx, (x, lengths) in enumerate(tqdm(dataloader, desc="Training")):
         x = x.to(device)
@@ -45,14 +61,21 @@ def train_epoch(model, dataloader, optimizer, device, criterion):
         optimizer.step()
         
         total_loss += loss.item()
+        batch_accuracy, batch_tokens = compute_batch_metrics(logits.detach(), x, pad_id)
+        total_accuracy += batch_accuracy * batch_tokens
+        total_tokens += batch_tokens
     
-    return total_loss / len(dataloader)
+    avg_loss = total_loss / max(len(dataloader), 1)
+    avg_accuracy = total_accuracy / max(total_tokens, 1)
+    return avg_loss, avg_accuracy
 
 
-def eval_epoch(model, dataloader, device, criterion):
+def eval_epoch(model, dataloader, device, criterion, pad_id):
     """Evaluate on validation set."""
     model.eval()
     total_loss = 0.0
+    total_accuracy = 0.0
+    total_tokens = 0
     
     with torch.no_grad():
         for x, lengths in tqdm(dataloader, desc="Validating"):
@@ -60,8 +83,13 @@ def eval_epoch(model, dataloader, device, criterion):
             logits = model(x)
             loss = criterion(logits.view(-1, logits.size(-1)), x.view(-1))
             total_loss += loss.item()
+            batch_accuracy, batch_tokens = compute_batch_metrics(logits, x, pad_id)
+            total_accuracy += batch_accuracy * batch_tokens
+            total_tokens += batch_tokens
     
-    return total_loss / len(dataloader)
+    avg_loss = total_loss / max(len(dataloader), 1)
+    avg_accuracy = total_accuracy / max(total_tokens, 1)
+    return avg_loss, avg_accuracy
 
 
 def generate_sample(model, device, vocab_size, seq_len=256, temperature=1.0):
@@ -130,6 +158,7 @@ def main():
     with open(vocab_path, 'r') as f:
         vocab = json.load(f)
     vocab_size = len(vocab)
+    pad_id = vocab.get("pad", vocab_size - 1)
     print(f"Vocabulary size: {vocab_size}")
     
     # Create datasets
@@ -178,7 +207,7 @@ def main():
     
     # Training setup
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(ignore_index=pad_id)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5, patience=2
     )
@@ -186,6 +215,8 @@ def main():
     # Training loop
     train_losses = []
     val_losses = []
+    train_accuracies = []
+    val_accuracies = []
     best_val_loss = float('inf')
     
     print("\nStarting training...")
@@ -193,14 +224,22 @@ def main():
         print(f"\n--- Epoch {epoch+1}/{args.epochs} ---")
         
         # Train
-        train_loss = train_epoch(model, train_loader, optimizer, device, criterion)
+        train_loss, train_accuracy = train_epoch(model, train_loader, optimizer, device, criterion, pad_id)
         train_losses.append(train_loss)
-        print(f"Train loss: {train_loss:.4f}")
+        train_accuracies.append(train_accuracy)
         
         # Validate
-        val_loss = eval_epoch(model, val_loader, device, criterion)
+        val_loss, val_accuracy = eval_epoch(model, val_loader, device, criterion, pad_id)
         val_losses.append(val_loss)
-        print(f"Val loss: {val_loss:.4f}")
+        val_accuracies.append(val_accuracy)
+
+        train_perplexity = float(torch.exp(torch.tensor(train_loss)))
+        val_perplexity = float(torch.exp(torch.tensor(val_loss)))
+        print(
+            f"Epoch {epoch+1:03d} | Train Recon: {train_loss:.4f} | Train Acc: {train_accuracy:.4f} | "
+            f"Val Recon: {val_loss:.4f} | Val Acc: {val_accuracy:.4f} | "
+            f"Train PPL: {train_perplexity:.2f} | Val PPL: {val_perplexity:.2f} | KL: N/A"
+        )
         
         # Learning rate scheduling
         scheduler.step(val_loss)
@@ -224,6 +263,9 @@ def main():
                 "val_loss": val_loss,
             }, best_checkpoint)
             print(f"Saved best checkpoint (val_loss: {val_loss:.4f})")
+
+            print(f"\nTraining stopped after {args.epochs} epochs.")
+            print(f"Best validation reconstruction loss: {best_val_loss:.4f}")
     
     # Plot training curves
     print("\nPlotting training curves...")
@@ -243,6 +285,9 @@ def main():
     loss_data = {
         "train_losses": train_losses,
         "val_losses": val_losses,
+        "train_accuracies": train_accuracies,
+        "val_accuracies": val_accuracies,
+        "pad_id": pad_id,
     }
     with open(os.path.join(args.output_dir, "losses.json"), "w") as f:
         json.dump(loss_data, f)
