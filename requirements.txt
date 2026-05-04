@@ -1,0 +1,8 @@
+torch
+numpy
+pretty_midi
+mido
+matplotlib
+pyyaml
+tqdm
+tensorboard
