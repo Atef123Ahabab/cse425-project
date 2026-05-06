@@ -44,6 +44,7 @@ def train_epoch(model, dataloader, optimizer, device, criterion, pad_id):
     total_loss = 0.0
     total_accuracy = 0.0
     total_tokens = 0
+    kl_loss = 0.0  # Task 1 is Autoencoder (not VAE), so KL = 0
     
     for batch_idx, (x, lengths) in enumerate(tqdm(dataloader, desc="Training")):
         x = x.to(device)
@@ -52,8 +53,9 @@ def train_epoch(model, dataloader, optimizer, device, criterion, pad_id):
         optimizer.zero_grad()
         logits = model(x)
         
-        # Compute loss (cross-entropy between logits and input tokens)
-        loss = criterion(logits.view(-1, logits.size(-1)), x.view(-1))
+        # Compute reconstruction loss (cross-entropy between logits and input tokens)
+        recon_loss = criterion(logits.view(-1, logits.size(-1)), x.view(-1))
+        loss = recon_loss  # Task 1: no KL term
         
         # Backward pass
         loss.backward()
@@ -67,7 +69,7 @@ def train_epoch(model, dataloader, optimizer, device, criterion, pad_id):
     
     avg_loss = total_loss / max(len(dataloader), 1)
     avg_accuracy = total_accuracy / max(total_tokens, 1)
-    return avg_loss, avg_accuracy
+    return avg_loss, avg_accuracy, 0.0
 
 
 def eval_epoch(model, dataloader, device, criterion, pad_id):
@@ -89,7 +91,7 @@ def eval_epoch(model, dataloader, device, criterion, pad_id):
     
     avg_loss = total_loss / max(len(dataloader), 1)
     avg_accuracy = total_accuracy / max(total_tokens, 1)
-    return avg_loss, avg_accuracy
+    return avg_loss, avg_accuracy, 0.0  # Task 1: KL = 0 (Autoencoder, not VAE)
 
 
 def generate_sample(model, device, vocab_size, seq_len=256, temperature=1.0):
@@ -127,9 +129,9 @@ def main():
                         help="Batch size")
     parser.add_argument("--seq_len", type=int, default=256,
                         help="Sequence length")
-    parser.add_argument("--hidden_dim", type=int, default=512,
+    parser.add_argument("--hidden_dim", type=int, default=128,
                         help="Hidden dimension")
-    parser.add_argument("--latent_dim", type=int, default=128,
+    parser.add_argument("--latent_dim", type=int, default=32,
                         help="Latent dimension")
     parser.add_argument("--lr", type=float, default=1e-3,
                         help="Learning rate")
@@ -192,12 +194,13 @@ def main():
     
     # Create model
     print("Creating model...")
+    print("Note: Task 1 is LSTM Autoencoder (not VAE), so KL divergence = 0")
     model = LSTMAutoencoder(
         vocab_size=vocab_size,
-        embed_dim=128,
+        embed_dim=64,
         hidden_dim=args.hidden_dim,
         latent_dim=args.latent_dim,
-        num_layers=2
+        num_layers=1
     )
     model.to(device)
     
@@ -206,10 +209,10 @@ def main():
     print(f"Model parameters: {total_params:,}")
     
     # Training setup
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
     criterion = nn.CrossEntropyLoss(ignore_index=pad_id)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=2
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=args.epochs, eta_min=1e-5
     )
     
     # Training loop
@@ -217,32 +220,39 @@ def main():
     val_losses = []
     train_accuracies = []
     val_accuracies = []
+    kl_losses = []
     best_val_loss = float('inf')
+    patience = 5
+    patience_counter = 0
     
     print("\nStarting training...")
     for epoch in range(args.epochs):
         print(f"\n--- Epoch {epoch+1}/{args.epochs} ---")
         
         # Train
-        train_loss, train_accuracy = train_epoch(model, train_loader, optimizer, device, criterion, pad_id)
+        train_loss, train_accuracy, train_kl = train_epoch(model, train_loader, optimizer, device, criterion, pad_id)
         train_losses.append(train_loss)
         train_accuracies.append(train_accuracy)
         
         # Validate
-        val_loss, val_accuracy = eval_epoch(model, val_loader, device, criterion, pad_id)
+        val_loss, val_accuracy, val_kl = eval_epoch(model, val_loader, device, criterion, pad_id)
         val_losses.append(val_loss)
         val_accuracies.append(val_accuracy)
+        kl_losses.append(val_kl)  # Task 1: KL = 0
 
         train_perplexity = float(torch.exp(torch.tensor(train_loss)))
         val_perplexity = float(torch.exp(torch.tensor(val_loss)))
+        loss_gap = abs(train_loss - val_loss)
+        sync_status = "✓ SYNC" if loss_gap < 0.1 else f"GAP: {loss_gap:.4f}"
+        
         print(
-            f"Epoch {epoch+1:03d} | Train Recon: {train_loss:.4f} | Train Acc: {train_accuracy:.4f} | "
-            f"Val Recon: {val_loss:.4f} | Val Acc: {val_accuracy:.4f} | "
-            f"Train PPL: {train_perplexity:.2f} | Val PPL: {val_perplexity:.2f} | KL: N/A"
+            f"Epoch {epoch+1:03d} | Train: {train_loss:.4f} | Val: {val_loss:.4f} | "
+            f"Acc: {train_accuracy:.4f}/{val_accuracy:.4f} | PPL: {train_perplexity:.2f}/{val_perplexity:.2f} | "
+            f"KL: 0.0000 | {sync_status}"
         )
         
-        # Learning rate scheduling
-        scheduler.step(val_loss)
+        # Learning rate scheduling (Cosine Annealing)
+        scheduler.step()
         
         # Save checkpoint
         checkpoint_path = os.path.join(args.output_dir, f"checkpoint_epoch_{epoch+1:03d}.pt")
@@ -256,18 +266,23 @@ def main():
         
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            patience_counter = 0
             best_checkpoint = os.path.join(args.output_dir, "checkpoint_best.pt")
             torch.save({
                 "epoch": epoch + 1,
                 "model_state_dict": model.state_dict(),
                 "val_loss": val_loss,
             }, best_checkpoint)
-            print(f"Saved best checkpoint (val_loss: {val_loss:.4f})")
+            print(f"  ✓ Best checkpoint saved (val_loss: {val_loss:.4f})")
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                print(f"\nEarly stopping: validation loss did not improve for {patience} epochs.")
+                break
 
-            print(f"\nTraining stopped after {args.epochs} epochs.")
-            print(f"Best validation reconstruction loss: {best_val_loss:.4f}")
-    
-    # Plot training curves
+    print(f"\nTraining stopped after {epoch+1} epochs.")
+    print(f"Best validation reconstruction loss: {best_val_loss:.4f}")
+    print(f"Note: Task 1 is LSTM Autoencoder (not VAE), so KL divergence is always 0.")
     print("\nPlotting training curves...")
     plt.figure(figsize=(10, 6))
     plt.plot(train_losses, label='Train Loss', marker='o')
@@ -287,6 +302,7 @@ def main():
         "val_losses": val_losses,
         "train_accuracies": train_accuracies,
         "val_accuracies": val_accuracies,
+        "kl_losses": kl_losses,  # Task 1: KL = 0 for all epochs
         "pad_id": pad_id,
     }
     with open(os.path.join(args.output_dir, "losses.json"), "w") as f:
