@@ -1,8 +1,1 @@
-__pycache__/
-*.py[cod]
-*.pth
-*.pt
-outputs/
-data/processed/
-.vscode/
-.ipynb_checkpoints/
+maestro-v3.0.0/ 
