@@ -266,7 +266,7 @@ Replace the placeholders below with final group member names before submission.
 | Member 1 | Dataset preprocessing, vocabulary creation, Task 1 LSTM Autoencoder training, Task 1 MIDI generation |
 | Member 2 | Task 2 VAE implementation, KL-divergence loss, KL annealing, latent interpolation generation |
 | Member 3 | Task 3 Transformer implementation, perplexity evaluation, long-sequence MIDI generation |
-| Member 4 | Metric analysis, report writing, README preparation, artifact organization, Google Drive upload |
+| Member 3| Metric analysis, report writing, README preparation, artifact organization, Google Drive upload |
 
 ## Final Submission Checklist
 
