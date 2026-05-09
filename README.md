@@ -2,6 +2,8 @@
 
 Course: CSE425/EEE474 Neural Networks
 
+
+
 This repository contains our group implementation for symbolic MIDI music generation. We implemented Tasks 1, 2, and 3 from the project specification:
 
 - Task 1: LSTM Autoencoder music generator
@@ -17,6 +19,11 @@ Replace the placeholders below after final upload.
 - GitHub repository: `https://github.com/Atef123Ahabab/cse425-project`
 - Generated MIDI Google Drive folder: `PASTE_PUBLIC_GOOGLE_DRIVE_MIDI_FOLDER_LINK_HERE`
 - Final report PDF Google Drive link: `PASTE_PUBLIC_GOOGLE_DRIVE_REPORT_PDF_LINK_HERE`
+- youtube link : https://www.youtube.com/watch?v=AeNKOfc8msM
+- google drive links - https://drive.google.com/drive/folders/126gWeZM5bgt6t8CZJes4sr8YIuTg9Xyn?fbclid=IwY2xjawRrjcJleHRuA2FlbQIxMQBzcnRjBmFwcF9pZAEwAAEe_wOv6-IqRsiRHqS5izwAk_8NmJug8RknwBu-Aw5DIEWG8OMAp0e5cLIS-dg_aem_kxknpUjptApGf5Gzy0kTSA
+
+
+
 
 ## Implemented Tasks
 
